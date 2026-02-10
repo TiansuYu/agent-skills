@@ -1,0 +1,25 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Python (for skills with utility scripts)
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Planning docs (dotfiles)
+.*plan*.md
+.*.md
+!.gitignore
+
+# Node
+node_modules/
