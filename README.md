@@ -10,7 +10,22 @@ A collection of reusable [Agent Skills](https://agentskills.io/specification) â€
 
 ## Installation
 
-Copy skills into respective agent skill locations, e.g. `~/.agent/skills`.
+### Via skills CLI (recommended)
+
+```bash
+# Install all skills
+npx skills add TiansuYu/agent-skills
+
+# Install a specific skill
+npx skills add TiansuYu/agent-skills --skill starrocks-expert
+
+# Install globally (available across all projects)
+npx skills add -g TiansuYu/agent-skills
+```
+
+### Manual
+
+Copy skills into respective agent skill locations, e.g. `~/.cursor/skills/`.
 
 ## Skill Structure
 
