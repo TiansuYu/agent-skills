@@ -7,6 +7,7 @@ This guide covers data loading patterns, query optimization, materialized views,
 - [Query Optimization](#query-optimization)
 - [Materialized Views](#materialized-views)
 - [ETL Pipeline Patterns](#etl-pipeline-patterns)
+- [SUBMIT TASK (Async Execution)](#submit-task-async-execution)
 - [Performance Troubleshooting](#performance-troubleshooting)
 - [Common Anti-Patterns](#common-anti-patterns)
 
@@ -670,6 +671,157 @@ FROM staging_users;
 
 COMMIT;
 ```
+
+---
+
+## SUBMIT TASK (Async Execution)
+
+`SUBMIT TASK` runs ETL statements asynchronously in the background. Available since v2.5, with scheduled execution since v3.3.
+
+### When to Use SUBMIT TASK
+
+| Scenario | Why SUBMIT TASK | Alternative |
+|----------|----------------|-------------|
+| Long-running INSERT INTO ... SELECT | Avoids client timeout; runs in background | Synchronous INSERT (blocks session) |
+| Scheduled recurring ETL (e.g. hourly aggregation) | Built-in scheduler with EVERY interval | External scheduler (Airflow, cron) |
+| CTAS for large result sets | Prevents session timeout on big datasets | Manual CREATE + INSERT |
+| INSERT OVERWRITE partition refresh | Fire-and-forget partition rebuilds | Synchronous OVERWRITE (blocks) |
+| Backfill / data migration | Submit multiple tasks and monitor via metadata | Sequential INSERT statements |
+
+**Use SUBMIT TASK when:**
+- The operation would exceed your session's `query_timeout`
+- You want StarRocks-native scheduling without external orchestrators
+- You need to fire-and-forget and check status later
+- You're running multiple independent ETL steps in parallel
+
+**Don't use SUBMIT TASK when:**
+- You need the result immediately in the same session
+- The operation finishes in seconds (overhead not worth it)
+- You already have Airflow/dbt orchestrating the pipeline (use those instead)
+
+### Syntax
+
+```sql
+SUBMIT TASK <task_name>
+[SCHEDULE [START(<schedule_start>)] EVERY(INTERVAL <schedule_interval>)]
+[PROPERTIES("key" = "value" [, ...])]
+AS <etl_statement>
+```
+
+Supported ETL statements:
+- `CREATE TABLE AS SELECT` (v3.0+)
+- `INSERT INTO / INSERT OVERWRITE` (v3.0+)
+- `CACHE SELECT` (v3.3+)
+
+### One-off Background Task
+
+```sql
+-- Background INSERT that won't block your session
+SUBMIT TASK backfill_2024
+AS
+INSERT INTO target_table
+SELECT * FROM source_table
+WHERE dt >= '2024-01-01' AND dt < '2025-01-01';
+```
+
+### Scheduled Recurring Task
+
+```sql
+-- Refresh aggregation table every 5 minutes
+SUBMIT TASK refresh_5min_agg
+SCHEDULE EVERY(INTERVAL 5 MINUTE)
+AS
+INSERT OVERWRITE hourly_metrics
+SELECT
+    date_trunc('hour', event_time) AS hour,
+    event_type,
+    COUNT(*) AS cnt,
+    SUM(amount) AS total
+FROM raw_events
+WHERE event_time >= DATE_SUB(NOW(), INTERVAL 2 HOUR)
+GROUP BY date_trunc('hour', event_time), event_type;
+```
+
+### Scheduled Task with Start Time
+
+```sql
+-- Start at midnight, run daily
+SUBMIT TASK daily_summary
+SCHEDULE START('2024-01-01 00:00:00') EVERY(INTERVAL 1 DAY)
+AS
+INSERT OVERWRITE daily_revenue PARTITION (dt)
+SELECT
+    DATE(order_time) AS dt,
+    store_id,
+    SUM(amount) AS revenue
+FROM orders
+WHERE order_time >= DATE_SUB(CURDATE(), INTERVAL 1 DAY)
+  AND order_time < CURDATE()
+GROUP BY DATE(order_time), store_id;
+```
+
+### Task with Session Properties
+
+```sql
+-- Extend timeout and enable profiling for a heavy task
+SUBMIT TASK heavy_etl
+PROPERTIES(
+    "session.insert_timeout" = "36000",
+    "session.enable_profile" = "true"
+)
+AS
+INSERT INTO warehouse.fact_orders
+SELECT * FROM staging.raw_orders;
+```
+
+### CTAS as Background Task
+
+```sql
+-- Create a snapshot table without blocking
+SUBMIT TASK create_snapshot
+AS
+CREATE TABLE snapshot_20240101
+AS SELECT * FROM production_table
+WHERE dt = '2024-01-01';
+```
+
+### Monitoring Tasks
+
+```sql
+-- List all registered tasks
+SELECT task_name, `schedule`, create_time, definition
+FROM information_schema.tasks;
+
+-- Check execution history for a specific task
+SELECT task_name, state, create_time, finish_time, error_message
+FROM information_schema.task_runs
+WHERE task_name = 'daily_summary'
+ORDER BY create_time DESC
+LIMIT 10;
+
+-- Find failed task runs
+SELECT task_name, state, error_message, create_time
+FROM information_schema.task_runs
+WHERE state = 'FAILED'
+ORDER BY create_time DESC;
+```
+
+### Drop a Task
+
+```sql
+-- Stop and remove a scheduled task
+DROP TASK daily_summary;
+```
+
+### FE Configuration Tuning
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `task_runs_concurrency` | 4 | Max parallel TaskRuns |
+| `task_runs_queue_length` | 500 | Max pending TaskRuns |
+| `task_runs_ttl_second` | 86400 | TTL for TaskRun records (seconds) |
+| `task_ttl_second` | 86400 | TTL for one-off Task templates (seconds) |
+| `task_min_schedule_interval_s` | 10 | Minimum schedule interval (seconds) |
 
 ---
 
