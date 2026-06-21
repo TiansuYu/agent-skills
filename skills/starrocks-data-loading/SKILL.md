@@ -72,13 +72,11 @@ curl --location-trusted -u user:password \
 ```
 
 **Check Stream Load Status:**
+
+Stream Load returns its result synchronously in the HTTP response JSON. It is **not** queryable via `SHOW LOAD` (that covers Broker Load, INSERT, and Spark Load only). Use the response, or the `get_load_state` endpoint:
 ```bash
-# Get result from response
 curl --location-trusted -u user:password \
     http://fe_host:8030/api/database/get_load_state?label=load_label_001
-
-# Or query in SQL
-SHOW LOAD WHERE label = 'load_label_001';
 ```
 
 ## 2. Broker Load (Batch from Object Storage)
@@ -218,17 +216,16 @@ WHERE date_col = '2024-01-01';
 ```
 
 **Multi-statement Transaction:**
+
+> **Version/cluster caveats:** Explicit SQL transactions require **v3.5+** and support **INSERT only** on shared-nothing clusters. `UPDATE`/`DELETE` inside a transaction need a **shared-data cluster on v4.0+**, must target a **Primary Key table**, and must appear **before** any INSERT on the same table (one UPDATE/DELETE per table).
 ```sql
 BEGIN;
 
-DELETE FROM staging_table WHERE load_date < '2024-01-01';
+-- DELETE/UPDATE must come before INSERT on the same table (PK table, shared-data v4.0+)
+DELETE FROM staging_pk_table WHERE load_date < '2024-01-01';
 
-INSERT INTO staging_table (id, value)
+INSERT INTO staging_pk_table (id, value)
 SELECT id, value FROM source_table WHERE status = 'active';
-
-UPDATE metrics_table
-SET last_updated = NOW()
-WHERE table_name = 'staging_table';
 
 COMMIT;
 ```

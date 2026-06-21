@@ -134,42 +134,41 @@ ORDER BY time_bucket DESC;
 
 ### Pattern 4: SCD Type 2 (Slowly Changing Dimension)
 
+`UPDATE` only works on **Primary Key tables**, so the history table must be a PK table (with `valid_from` in the key to keep multiple versions per `user_id`).
+
+> **Transaction caveats:** Explicit transactions require **v3.5+**; `UPDATE` inside a transaction needs a **shared-data cluster on v4.0+** and must precede the `INSERT` on the same table. On other deployments, run the two statements separately instead of wrapping them in `BEGIN/COMMIT`.
+
 ```sql
--- Historical dimension table
+-- Historical dimension table (Primary Key table so UPDATE is supported)
 CREATE TABLE dim_users_history (
     user_id BIGINT NOT NULL,
+    valid_from DATETIME NOT NULL,
     username VARCHAR(100),
     email VARCHAR(200),
     status VARCHAR(20),
-    valid_from DATETIME NOT NULL,
     valid_to DATETIME,
     is_current BOOLEAN
 )
-DUPLICATE KEY (user_id, valid_from)
+PRIMARY KEY (user_id, valid_from)
 DISTRIBUTED BY HASH(user_id) BUCKETS 16;
 
--- ETL to handle updates
-BEGIN;
-
--- Step 1: Close existing records for updated users
+-- Step 1: Close existing current records for updated users
 UPDATE dim_users_history
 SET valid_to = NOW(), is_current = false
 WHERE user_id IN (SELECT user_id FROM staging_users)
   AND is_current = true;
 
--- Step 2: Insert new records
+-- Step 2: Insert new current records
 INSERT INTO dim_users_history
 SELECT
     user_id,
+    NOW() as valid_from,
     username,
     email,
     status,
-    NOW() as valid_from,
     NULL as valid_to,
     true as is_current
 FROM staging_users;
-
-COMMIT;
 ```
 
 ## SUBMIT TASK (Async Execution)
@@ -307,8 +306,8 @@ ORDER BY create_time DESC;
 ### Drop a Task
 
 ```sql
--- Stop and remove a scheduled task
-DROP TASK daily_summary;
+-- Stop and remove a scheduled task (wrap the name in backticks to avoid parse failures)
+DROP TASK `daily_summary`;
 ```
 
 ### FE Configuration Tuning
@@ -317,6 +316,6 @@ DROP TASK daily_summary;
 |-----------|---------|-------------|
 | `task_runs_concurrency` | 4 | Max parallel TaskRuns |
 | `task_runs_queue_length` | 500 | Max pending TaskRuns |
-| `task_runs_ttl_second` | 86400 | TTL for TaskRun records (seconds) |
+| `task_runs_ttl_second` | 604800 | TTL for TaskRun records (seconds; 7 days) |
 | `task_ttl_second` | 86400 | TTL for one-off Task templates (seconds) |
 | `task_min_schedule_interval_s` | 10 | Minimum schedule interval (seconds) |

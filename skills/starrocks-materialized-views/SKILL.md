@@ -103,8 +103,8 @@ SHOW MATERIALIZED VIEWS FROM database_name;
 -- Refresh manually
 REFRESH MATERIALIZED VIEW mv_user_metrics;
 
--- Refresh specific partitions
-REFRESH MATERIALIZED VIEW mv_daily_revenue PARTITION (p20240101, p20240102);
+-- Refresh a partition range (by partition-column value, not partition name)
+REFRESH MATERIALIZED VIEW mv_daily_revenue PARTITION START ("2024-01-01") END ("2024-01-02");
 
 -- Drop MV
 DROP MATERIALIZED VIEW mv_user_metrics;
@@ -129,7 +129,7 @@ GROUP BY order_date, store_id;
 -- No query change needed!
 ```
 
-**Enable query rewrite:**
+For async MVs on the default catalog, query rewrite is **enabled by default** (`enable_materialized_view_rewrite` and `enable_materialized_view_union_rewrite` both default to `true` since v2.5). You'd only set these to re-enable after disabling:
 ```sql
 SET enable_materialized_view_rewrite = true;
 SET enable_materialized_view_union_rewrite = true;

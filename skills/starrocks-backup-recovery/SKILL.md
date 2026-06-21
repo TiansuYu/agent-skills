@@ -26,7 +26,7 @@ Related skills: [starrocks-monitoring] for routine maintenance scheduling; [star
 -- Create backup repository
 CREATE REPOSITORY backup_repo
 WITH BROKER
-ON LOCATION "s3://backup-bucket/starrocks/"
+ON LOCATION "s3a://backup-bucket/starrocks/"   -- backup repos require the s3a:// prefix
 PROPERTIES (
     "aws.s3.access_key" = "your_key",
     "aws.s3.secret_key" = "your_secret",

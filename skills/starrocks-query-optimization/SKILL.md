@@ -180,7 +180,7 @@ SET pipeline_dop = 16;  -- Degree of parallelism (0 = auto)
 -- For complex queries, adjust fragment instance
 SET parallel_fragment_exec_instance_num = 8;
 
--- Enable adaptive DOP (StarRocks 3.0+)
+-- Adaptive parallelism for loading sinks (INSERT INTO / Broker Load), not query DOP (v2.5+)
 SET enable_adaptive_sink_dop = true;
 ```
 
@@ -198,8 +198,8 @@ SELECT * FROM users WHERE email = 'user@example.com';
 **Bitmap index for categorical filters:**
 ```sql
 -- Create bitmap index on status
-ALTER TABLE orders
-SET ("indexes" = "idx_status ON status USING BITMAP");
+ALTER TABLE orders ADD INDEX idx_status (status) USING BITMAP;
+-- (equivalently: CREATE INDEX idx_status ON orders (status) USING BITMAP;)
 
 -- Fast filtering
 SELECT COUNT(*) FROM orders WHERE status IN ('completed', 'shipped');
@@ -226,7 +226,7 @@ SHOW QUERY PROFILE;
 Look for:
 - High `ScanTime` → Add indexes or partition pruning
 - High `NetworkTime` → Check JOIN strategy (use broadcast)
-- High `AggregateTime` → Pre-aggregate or use materialized views
+- High `AggComputeTime` → Pre-aggregate or use materialized views
 - Large `RowsReturned` → Add filters earlier
 
 **Step 3: Check execution plan**

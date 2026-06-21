@@ -279,31 +279,31 @@ You can merge historical partitions into coarser granularity for better efficien
 SHOW PARTITIONS FROM table_name;
 
 -- Example output shows auto-generated partition names:
--- p20240101000000  (for date_trunc('day', ...))
--- p20240101120000  (for date_trunc('hour', ...))
--- p10001_20240101000000 (for composite: tenant_id, date_trunc('day', ...))
+-- p20240101        (for date_trunc('day', ...)  — date only, no time component)
+-- p2024010112      (for date_trunc('hour', ...))
+-- p10001_20240101  (for composite: tenant_id, date_trunc('day', ...))
 
 -- Drop old partitions by name
 ALTER TABLE table_name
-DROP PARTITION p20231201000000;
+DROP PARTITION p20231201;
 
 -- Drop multiple partitions
 ALTER TABLE table_name
-DROP PARTITION p20231201000000, p20231202000000;
+DROP PARTITION p20231201, p20231202;
 
 -- Truncate specific partition
-TRUNCATE TABLE table_name PARTITION (p20240101000000);
+TRUNCATE TABLE table_name PARTITION (p20240101);
 ```
 
 **Partition lifecycle management (TTL):**
 ```sql
--- Set automatic partition TTL (drops partitions older than N days)
+-- Keep only the most recent N partitions (count-based)
 ALTER TABLE events
 SET ("partition_live_number" = "90");  -- Keep only last 90 partitions
 
--- Or use partition retention in days
+-- Or use an expression-based retention condition (StarRocks 3.5+)
 ALTER TABLE events
-SET ("partition_retention_time" = "90d");
+SET ("partition_retention_condition" = "dt >= CURRENT_DATE() - INTERVAL 3 MONTH");
 ```
 
 ### Partition Pruning Verification
@@ -460,8 +460,7 @@ SET ("bloom_filter_columns" = "email,phone");
 
 **Use for:**
 - High-cardinality VARCHAR columns
-- Equality filters (WHERE email = '...')
-- NOT IN queries
+- Equality filters (`WHERE email = '...'`) and `IN` lists
 
 **Don't use for:**
 - Low-cardinality columns
@@ -471,30 +470,33 @@ SET ("bloom_filter_columns" = "email,phone");
 ### 3. Bitmap Index
 
 ```sql
-ALTER TABLE events
-SET ("indexes" = "idx_status ON status USING BITMAP");
+-- Add to an existing table
+CREATE INDEX idx_status ON events (status) USING BITMAP;
+-- (equivalently: ALTER TABLE events ADD INDEX idx_status (status) USING BITMAP;)
 
--- Or in CREATE TABLE
+-- Or inline in CREATE TABLE (INDEX is a separate entry in the column list)
 CREATE TABLE events (
     event_time DATETIME,
-    status VARCHAR(20) INDEX idx_status USING BITMAP,
-    category VARCHAR(50)
+    user_id BIGINT,
+    status VARCHAR(20),
+    category VARCHAR(50),
+    INDEX idx_status (status) USING BITMAP
 )
-DUPLICATE KEY (event_time)
+DUPLICATE KEY (event_time, user_id)
 PARTITION BY date_trunc('day', event_time)
 DISTRIBUTED BY HASH(user_id) BUCKETS 32;
 ```
 
 **Use for:**
-- Low to medium cardinality columns (10-10000 distinct values)
-- Frequent WHERE filters
+- Columns where the filter eliminates the vast majority of rows
+- Frequent WHERE/point-query filters
 - Common in OLAP dimensions (status, category, region)
 
 ### 4. NGram Bloom Filter (Full-text Search)
 
 ```sql
 ALTER TABLE articles
-SET ("indexes" = "idx_content ON content USING NGRAMBF(5)");
+ADD INDEX idx_content (content) USING NGRAMBF ("gram_num" = "4", "bloom_filter_fpp" = "0.05");
 ```
 
 **Use for:**

@@ -40,27 +40,26 @@ SET parallel_fragment_exec_instance_num = 8;
 
 ## Resource Groups (Global)
 
+Users/roles are mapped to a group via **classifiers** in the `TO (...)` clause — there is no `SET PROPERTY ... 'resource_group'`. CPU share is set with `cpu_weight` (relative weight) or `exclusive_cpu_cores` (dedicated cores); the old `cpu_core_limit`/`"type"` properties are deprecated (since v3.3.5).
+
 ```sql
--- Create resource group for ETL jobs
+-- Create resource group for ETL jobs, mapped to a user via a classifier
 CREATE RESOURCE GROUP etl_group
+TO (user = 'etl_user')
 WITH (
-    "cpu_core_limit" = "10",
+    "cpu_weight" = "10",
     "mem_limit" = "50%",
-    "concurrency_limit" = "10",
-    "type" = "normal"
+    "concurrency_limit" = "10"
 );
 
--- Create high-priority group for dashboards
+-- Create high-priority group for dashboards with dedicated CPU cores
 CREATE RESOURCE GROUP dashboard_group
+TO (user = 'dashboard_user', query_type in ('select'))
 WITH (
-    "cpu_core_limit" = "20",
+    "exclusive_cpu_cores" = "20",
     "mem_limit" = "30%",
-    "concurrency_limit" = "20",
-    "type" = "short_query"
+    "concurrency_limit" = "20"
 );
-
--- Assign user to group
-SET PROPERTY FOR 'etl_user' 'resource_group' = 'etl_group';
 
 -- View resource groups
 SHOW RESOURCE GROUPS ALL;
@@ -72,8 +71,9 @@ SHOW RESOURCE GROUPS ALL;
 -- Create storage volume (for remote storage)
 CREATE STORAGE VOLUME my_s3_volume
 TYPE = S3
-LOCATIONS = ("s3://my-bucket/starrocks/")
+LOCATIONS = ("s3://my-bucket/starrocks/")   -- bucket/path only (use s3:// here, unlike backup repos which use s3a://)
 PROPERTIES (
+    "enabled" = "true",                       -- required to activate the volume
     "aws.s3.region" = "us-east-1",
     "aws.s3.access_key" = "your_key",
     "aws.s3.secret_key" = "your_secret"

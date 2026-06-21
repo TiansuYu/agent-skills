@@ -53,14 +53,14 @@ SHOW QUERY PROFILE '<query_id>';
 
 **Data Loading:**
 ```sql
--- Recent load jobs
+-- Recent load jobs (Broker Load / INSERT / Spark Load)
 SHOW LOAD ORDER BY CreateTime DESC LIMIT 10;
 
 -- Failed loads
 SHOW LOAD WHERE State = 'CANCELLED';
 
--- Stream load statistics
-SHOW STREAM LOAD;
+-- Stream Load / Routine Load are not shown by SHOW LOAD; query information_schema instead
+SELECT * FROM information_schema.loads ORDER BY create_time DESC LIMIT 10;
 ```
 
 ## Compaction Management
@@ -69,16 +69,16 @@ SHOW STREAM LOAD;
 -- Check compaction status
 SHOW PROC '/compactions';
 
--- Trigger manual compaction (if needed)
+-- Trigger manual compaction (v3.1+): whole table, a partition, or cumulative
 ALTER TABLE table_name COMPACT;
+ALTER TABLE table_name COMPACT partition_name;
+ALTER TABLE table_name CUMULATIVE COMPACT;
 
--- Configure compaction thresholds
-ALTER TABLE table_name
-SET (
-    "compaction_policy" = "size_based",
-    "min_cumulative_compaction_num_singleton_deltas" = "5",
-    "max_cumulative_compaction_num_singleton_deltas" = "1000"
-);
+-- Compaction thresholds are BE configuration, NOT table properties.
+-- Tune them in be.conf or dynamically via the be_configs table, e.g.:
+UPDATE information_schema.be_configs
+SET value = "100"
+WHERE name = "max_cumulative_compaction_num_singleton_deltas";
 ```
 
 ## Tablet Repair and Rebalancing
@@ -117,18 +117,20 @@ ADMIN REBALANCE DISK;
 ## Statistics Collection (for CBO)
 
 ```sql
--- Collect statistics for better query planning
+-- Collect statistics for better query planning (manual, synchronous by default)
 ANALYZE TABLE table_name;
 
 -- Collect for specific columns
 ANALYZE TABLE table_name (col1, col2);
 
--- Auto collection
-ALTER TABLE table_name
-SET ("auto_analyze" = "true");
+-- Automatic full collection is ON by default (no per-table property needed);
+-- it is governed by FE config (e.g. enable_collect_full_statistic,
+-- statistic_auto_analyze_start_time / _end_time). Define a recurring custom
+-- collection job with CREATE ANALYZE if you need finer control.
 
--- Check statistics
-SHOW STATS table_name;
+-- Check collection status and statistics metadata
+SHOW ANALYZE STATUS;
+SHOW META;
 ```
 
 ## Troubleshooting Commands
