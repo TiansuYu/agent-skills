@@ -1,16 +1,27 @@
+---
+name: starrocks-table-design
+description: Design StarRocks tables — choosing table types (Duplicate/Aggregate/Unique/Primary Key), partitioning with date_trunc() expressions, bucketing/distribution, and indexes (prefix, bloom filter, bitmap, ngram). Use when creating or modifying StarRocks table schemas, choosing a key model, setting partition granularity, sizing buckets, or selecting indexes.
+license: Apache-2.0
+metadata:
+    author: "Tiansu Yu"
+    version: "1.0"
+---
+
 # StarRocks Table Design
 
-This guide covers table design, partitioning, bucketing, and indexing strategies for StarRocks.
+Design table schemas for StarRocks (a sub-second MPP OLAP database): table types, partitioning, bucketing/distribution, and indexing.
 
 Reference: [StarRocks Partitioning Best Practices](https://docs.starrocks.io/docs/best_practices/partitioning/)
 
-## Table of Contents
-- [Table Types and DDL](#table-types-and-ddl)
-- [Partitioning Strategies](#partitioning-strategies)
-- [Bucketing and Distribution](#bucketing-and-distribution)
-- [Indexes and Optimization](#indexes-and-optimization)
+## When to Use
 
----
+- Creating or modifying a StarRocks table schema
+- Choosing a key model (Duplicate / Aggregate / Unique / Primary Key)
+- Deciding partition strategy and granularity
+- Sizing bucket counts and choosing the distribution key
+- Selecting indexes for filter/lookup performance
+
+Related skills: [starrocks-query-optimization] for verifying partition pruning and JOIN strategies; [starrocks-data-loading] for loading into the tables you design.
 
 ## Table Types and DDL
 
@@ -113,20 +124,20 @@ PROPERTIES (
 CREATE TABLE transactions (
     -- Good: DATETIME for timestamps
     transaction_time DATETIME NOT NULL,
-    
+
     -- Good: BIGINT for IDs
     transaction_id BIGINT NOT NULL,
     user_id BIGINT,
-    
+
     -- Good: DECIMAL for money
     amount DECIMAL(18, 2),
-    
+
     -- Good: VARCHAR with appropriate length
     currency VARCHAR(3),
-    
+
     -- Good: JSON for flexible data
     metadata JSON,
-    
+
     -- Good: ARRAY for multi-value
     tags ARRAY<VARCHAR(50)>
 )
@@ -134,8 +145,6 @@ DUPLICATE KEY (transaction_time, transaction_id)
 PARTITION BY date_trunc('day', transaction_time)
 DISTRIBUTED BY HASH(transaction_id) BUCKETS 32;
 ```
-
----
 
 ## Partitioning Strategies
 
@@ -270,31 +279,31 @@ You can merge historical partitions into coarser granularity for better efficien
 SHOW PARTITIONS FROM table_name;
 
 -- Example output shows auto-generated partition names:
--- p20240101000000  (for date_trunc('day', ...))
--- p20240101120000  (for date_trunc('hour', ...))
--- p10001_20240101000000 (for composite: tenant_id, date_trunc('day', ...))
+-- p20240101        (for date_trunc('day', ...)  — date only, no time component)
+-- p2024010112      (for date_trunc('hour', ...))
+-- p10001_20240101  (for composite: tenant_id, date_trunc('day', ...))
 
 -- Drop old partitions by name
 ALTER TABLE table_name
-DROP PARTITION p20231201000000;
+DROP PARTITION p20231201;
 
 -- Drop multiple partitions
 ALTER TABLE table_name
-DROP PARTITION p20231201000000, p20231202000000;
+DROP PARTITION p20231201, p20231202;
 
 -- Truncate specific partition
-TRUNCATE TABLE table_name PARTITION (p20240101000000);
+TRUNCATE TABLE table_name PARTITION (p20240101);
 ```
 
 **Partition lifecycle management (TTL):**
 ```sql
--- Set automatic partition TTL (drops partitions older than N days)
+-- Keep only the most recent N partitions (count-based)
 ALTER TABLE events
 SET ("partition_live_number" = "90");  -- Keep only last 90 partitions
 
--- Or use partition retention in days
+-- Or use an expression-based retention condition (StarRocks 3.5+)
 ALTER TABLE events
-SET ("partition_retention_time" = "90d");
+SET ("partition_retention_condition" = "dt >= CURRENT_DATE() - INTERVAL 3 MONTH");
 ```
 
 ### Partition Pruning Verification
@@ -320,8 +329,6 @@ WHERE date_trunc('day', event_time) = '2024-01-01';
 ```
 
 **Best practice:** Always filter using the same expression or direct comparison on the partitioned column.
-
----
 
 ## Bucketing and Distribution
 
@@ -410,8 +417,6 @@ JOIN users u ON o.user_id = u.user_id;
 - Same bucket count
 - Same replication strategy
 
----
-
 ## Indexes and Optimization
 
 ### 1. Prefix Index (Automatic)
@@ -455,8 +460,7 @@ SET ("bloom_filter_columns" = "email,phone");
 
 **Use for:**
 - High-cardinality VARCHAR columns
-- Equality filters (WHERE email = '...')
-- NOT IN queries
+- Equality filters (`WHERE email = '...'`) and `IN` lists
 
 **Don't use for:**
 - Low-cardinality columns
@@ -466,37 +470,38 @@ SET ("bloom_filter_columns" = "email,phone");
 ### 3. Bitmap Index
 
 ```sql
-ALTER TABLE events
-SET ("indexes" = "idx_status ON status USING BITMAP");
+-- Add to an existing table
+CREATE INDEX idx_status ON events (status) USING BITMAP;
+-- (equivalently: ALTER TABLE events ADD INDEX idx_status (status) USING BITMAP;)
 
--- Or in CREATE TABLE
+-- Or inline in CREATE TABLE (INDEX is a separate entry in the column list)
 CREATE TABLE events (
     event_time DATETIME,
-    status VARCHAR(20) INDEX idx_status USING BITMAP,
-    category VARCHAR(50)
+    user_id BIGINT,
+    status VARCHAR(20),
+    category VARCHAR(50),
+    INDEX idx_status (status) USING BITMAP
 )
-DUPLICATE KEY (event_time)
+DUPLICATE KEY (event_time, user_id)
 PARTITION BY date_trunc('day', event_time)
 DISTRIBUTED BY HASH(user_id) BUCKETS 32;
 ```
 
 **Use for:**
-- Low to medium cardinality columns (10-10000 distinct values)
-- Frequent WHERE filters
+- Columns where the filter eliminates the vast majority of rows
+- Frequent WHERE/point-query filters
 - Common in OLAP dimensions (status, category, region)
 
 ### 4. NGram Bloom Filter (Full-text Search)
 
 ```sql
 ALTER TABLE articles
-SET ("indexes" = "idx_content ON content USING NGRAMBF(5)");
+ADD INDEX idx_content (content) USING NGRAMBF ("gram_num" = "4", "bloom_filter_fpp" = "0.05");
 ```
 
 **Use for:**
 - LIKE '%keyword%' searches
 - Text search scenarios
-
----
 
 ## Table Design Checklist
 
@@ -516,3 +521,12 @@ Before creating production tables:
 - [ ] Enable persistent index for Primary Key tables
 - [ ] Set replication_num = 3 for production
 - [ ] Configure partition TTL for automatic cleanup
+
+## Common Anti-Patterns to Avoid
+
+❌ **Don't** use VARCHAR for time columns that will be partitioned
+❌ **Don't** apply functions to partition columns in WHERE (breaks pruning)
+❌ **Don't** create too many buckets (causes small files)
+❌ **Don't** create too few buckets (causes data skew)
+❌ **Don't** use UNIQUE KEY if you only need deduplication (use DUPLICATE + GROUP BY)
+❌ **Don't** create composite partitions that exceed 100k total partitions
