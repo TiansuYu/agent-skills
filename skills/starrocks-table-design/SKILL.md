@@ -1,16 +1,27 @@
+---
+name: starrocks-table-design
+description: Design StarRocks tables — choosing table types (Duplicate/Aggregate/Unique/Primary Key), partitioning with date_trunc() expressions, bucketing/distribution, and indexes (prefix, bloom filter, bitmap, ngram). Use when creating or modifying StarRocks table schemas, choosing a key model, setting partition granularity, sizing buckets, or selecting indexes.
+license: Apache-2.0
+metadata:
+    author: "Tiansu Yu"
+    version: "1.0"
+---
+
 # StarRocks Table Design
 
-This guide covers table design, partitioning, bucketing, and indexing strategies for StarRocks.
+Design table schemas for StarRocks (a sub-second MPP OLAP database): table types, partitioning, bucketing/distribution, and indexing.
 
 Reference: [StarRocks Partitioning Best Practices](https://docs.starrocks.io/docs/best_practices/partitioning/)
 
-## Table of Contents
-- [Table Types and DDL](#table-types-and-ddl)
-- [Partitioning Strategies](#partitioning-strategies)
-- [Bucketing and Distribution](#bucketing-and-distribution)
-- [Indexes and Optimization](#indexes-and-optimization)
+## When to Use
 
----
+- Creating or modifying a StarRocks table schema
+- Choosing a key model (Duplicate / Aggregate / Unique / Primary Key)
+- Deciding partition strategy and granularity
+- Sizing bucket counts and choosing the distribution key
+- Selecting indexes for filter/lookup performance
+
+Related skills: [starrocks-query-optimization] for verifying partition pruning and JOIN strategies; [starrocks-data-loading] for loading into the tables you design.
 
 ## Table Types and DDL
 
@@ -113,20 +124,20 @@ PROPERTIES (
 CREATE TABLE transactions (
     -- Good: DATETIME for timestamps
     transaction_time DATETIME NOT NULL,
-    
+
     -- Good: BIGINT for IDs
     transaction_id BIGINT NOT NULL,
     user_id BIGINT,
-    
+
     -- Good: DECIMAL for money
     amount DECIMAL(18, 2),
-    
+
     -- Good: VARCHAR with appropriate length
     currency VARCHAR(3),
-    
+
     -- Good: JSON for flexible data
     metadata JSON,
-    
+
     -- Good: ARRAY for multi-value
     tags ARRAY<VARCHAR(50)>
 )
@@ -134,8 +145,6 @@ DUPLICATE KEY (transaction_time, transaction_id)
 PARTITION BY date_trunc('day', transaction_time)
 DISTRIBUTED BY HASH(transaction_id) BUCKETS 32;
 ```
-
----
 
 ## Partitioning Strategies
 
@@ -321,8 +330,6 @@ WHERE date_trunc('day', event_time) = '2024-01-01';
 
 **Best practice:** Always filter using the same expression or direct comparison on the partitioned column.
 
----
-
 ## Bucketing and Distribution
 
 ### Determining Bucket Count
@@ -410,8 +417,6 @@ JOIN users u ON o.user_id = u.user_id;
 - Same bucket count
 - Same replication strategy
 
----
-
 ## Indexes and Optimization
 
 ### 1. Prefix Index (Automatic)
@@ -496,8 +501,6 @@ SET ("indexes" = "idx_content ON content USING NGRAMBF(5)");
 - LIKE '%keyword%' searches
 - Text search scenarios
 
----
-
 ## Table Design Checklist
 
 Before creating production tables:
@@ -516,3 +519,12 @@ Before creating production tables:
 - [ ] Enable persistent index for Primary Key tables
 - [ ] Set replication_num = 3 for production
 - [ ] Configure partition TTL for automatic cleanup
+
+## Common Anti-Patterns to Avoid
+
+❌ **Don't** use VARCHAR for time columns that will be partitioned
+❌ **Don't** apply functions to partition columns in WHERE (breaks pruning)
+❌ **Don't** create too many buckets (causes small files)
+❌ **Don't** create too few buckets (causes data skew)
+❌ **Don't** use UNIQUE KEY if you only need deduplication (use DUPLICATE + GROUP BY)
+❌ **Don't** create composite partitions that exceed 100k total partitions
